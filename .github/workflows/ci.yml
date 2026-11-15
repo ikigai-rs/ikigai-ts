@@ -60,6 +60,31 @@ jobs:
       - name: Cross-runtime (Node and Bun)
         run: deno task cross-runtime --require
 
+  # The socket checks on macOS (ledger #3666): the shared socket checks under
+  # Deno and the Node adapter, the socket-mode probe (pinned for macOS), and
+  # the same checks under Node and Bun. Not the whole suite: the Linux jobs run
+  # that. macOS limits a socket path to 104 bytes and its default TMPDIR under
+  # /var/folders is long, so the sockets go under /tmp.
+  macos:
+    runs-on: macos-latest
+    env:
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Socket checks (Deno, Node adapter, socket-mode probe)
+        run: deno task runtime-test
+      - name: Cross-runtime (Node and Bun)
+        run: deno task cross-runtime --require
+
   # The real Rust door. The `test` job skips every host-backed test (no binary);
   # this one builds the pinned ikigai-cli, cached by its version, puts it on PATH
   # and runs the same suite so the integration and IssueWith tests actually run.
