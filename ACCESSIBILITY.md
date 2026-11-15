@@ -24,8 +24,11 @@ The published library (`src/`):
   `no endpoint resolved for urn:x:y`); `AuthError` in `src/auth.ts`, a stable
   code and a fixed sentence that never holds the credential
   (`bearer-token-syntax: a bearer token must be a non-empty RFC 6750 b64token`);
-  and the protocol, decode and template errors (`ProtocolError`, `DecodeError`
-  in `src/postcard.ts`, `TemplateError` in `src/template.ts`);
+  URL-safe base64 refusals from `decode_url` use the same code
+  (`base64-invalid`) and a fixed sentence naming the URL-safe, unpadded profile
+  and the refused rule (symbol, length, padding or unused bits), without input
+  characters; and the protocol, decode and template errors (`ProtocolError`,
+  `DecodeError` in `src/postcard.ts`, `TemplateError` in `src/template.ts`);
   `SocketPathRefused` in `src/socket_place.ts`, a sentence naming the refused
   path, what is wrong with it (its owner's uid, its mode in octal, or what it is
   instead of a socket) and what to do
@@ -126,6 +129,13 @@ assistive technology. The results format follows
 | Speech input                                                                  | Blocked | No speech-input session was available or used for this review.                                                                                                                                                                                      |
 | Switch access                                                                 | Blocked | No switch-access session was available or used for this review.                                                                                                                                                                                     |
 | Braille display                                                               | Blocked | No braille display was available or used for this review.                                                                                                                                                                                           |
+
+### Base64url refusal check (2026-11-15)
+
+| Check                                                 | Result  | Evidence                                                                                                                                                                                                                                                      |
+| ----------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| URL-safe refusal wording and input exclusion          | Pass    | Deno 2.9.8: `deno test -A tests/auth_test.ts`, 12 passed. Every shared URL-safe refusal runs; fixed messages cover symbol, length, padding and unused bits, and assertions exclude input from string and JSON errors. Checks wording and data exclusion only. |
+| Browser and assistive technology for base64url errors | Blocked | No browser or assistive-technology evaluation ran; these helpers return bytes or throw text errors.                                                                                                                                                           |
 
 ## Known limitations
 

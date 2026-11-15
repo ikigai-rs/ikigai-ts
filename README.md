@@ -88,11 +88,14 @@ aebf30a (PR 35; ledger #1813, ledger #2838, ledger #2883).
 `src/auth.ts` (`@ikigai/ts/auth`, zero dependencies) ports `ikigai_http::auth`
 and `ikigai_http::base64`: `basicAuthorization` (RFC 7617),
 `bearerAuthorization` (RFC 6750), `parseAuthorization`, `base64Encode` and
-`base64Decode` (padding required, canonical pad bits). A refusal throws an
-`AuthError` with a stable `code`; its message never holds the credential.
-`tests/auth_test.ts` runs every case of `tests/auth_vectors.json`, a verbatim
-copy of ikigai-http's `tests/vectors/auth_vectors.json` at ikigai-http commit
-ffadc89 (ledger #1862).
+`base64Decode` (padding required, canonical pad bits), plus `encode_url` and
+`decode_url` (RFC 4648 section 5, URL-safe alphabet, unpadded and canonical).
+URL-safe decoding refuses `=`, whitespace, `+`, `/`, impossible lengths and
+nonzero unused bits. A refusal throws an `AuthError` with a stable `code`; its
+message never holds the credential. `tests/auth_test.ts` runs every case of
+`tests/auth_vectors.json`, a verbatim copy of ikigai-http's
+`tests/vectors/auth_vectors.json` at ikigai-http commit 064e474 (0.7.2, ledger
+#3771).
 
 ### JSR: what is exported, and why `./zod` is not
 
