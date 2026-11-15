@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — canonical base64url (ledger #3771)
+
+- Add `encode_url` and `decode_url` to `@ikigai/ts/auth` for canonical, unpadded
+  RFC 4648 section 5 base64url. Refusals use `base64-invalid` and fixed reasons
+  without input. Keep standard padded base64 behavior unchanged.
+- Sync the shared auth vectors verbatim with ikigai-http 0.7.2 (064e474); run
+  every URL-safe round-trip and refusal case under Deno, Node and Bun.
+
 ## Unreleased — socket-mode probe measured on macOS (ledger #3666)
 
 - The socket-mode probe in `tests/runtime_test.ts` records each dial's outcome

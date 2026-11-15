@@ -1,6 +1,6 @@
 /**
- * `Authorization` header values and standard base64: a port of
- * `ikigai_http::auth` and `ikigai_http::base64` (ikigai-http 0.2.1), pinned by
+ * `Authorization` header values and base64: a port of
+ * `ikigai_http::auth` and `ikigai_http::base64` (ikigai-http 0.7.2), pinned by
  * the shared vectors in `tests/auth_vectors.json` (ledger #1862).
  *
  * | You have | Function |
@@ -8,6 +8,7 @@
  * | a user and a password | {@link basicAuthorization} (RFC 7617) |
  * | a bearer token | {@link bearerAuthorization} (RFC 6750) |
  * | a received header value | {@link parseAuthorization} (RFC 9110) |
+ * | URL-safe unpadded base64 | {@link encode_url}, {@link decode_url} |
  * | bytes or a base64 string | {@link base64Encode}, {@link base64Decode} |
  *
  * A refusal throws an {@link AuthError} whose `code` is a stable string. Its
@@ -109,6 +110,63 @@ export function base64Decode(encoded: string): Uint8Array {
   }
   if (acc !== 0) throw new AuthError("base64-invalid"); // non-zero pad bits
   return out;
+}
+
+const URL_REASONS = {
+  symbol: "a character outside the URL-safe alphabet, or misplaced padding",
+  length: "a length that no unpadded encoding has",
+  bits: "nonzero unused bits in the last symbol (RFC 4648 §3.5)",
+  padding: "padding is not allowed",
+} as const;
+
+function urlError(reason: keyof typeof URL_REASONS): AuthError {
+  const error = new AuthError("base64-invalid");
+  error.message = "base64-invalid: " +
+    "not canonical base64url (RFC 4648 §5, URL-safe alphabet, unpadded): " +
+    URL_REASONS[reason];
+  return error;
+}
+
+/**
+ * Encode RFC 4648 section 5 base64url with `-` and `_`, without padding.
+ *
+ * ```ts
+ * import { encode_url } from "@ikigai/ts/auth";
+ * import { assertEquals } from "@std/assert";
+ * assertEquals(encode_url(new Uint8Array([0xfb, 0xff])), "-_8");
+ * ```
+ */
+export function encode_url(bytes: Uint8Array): string {
+  return base64Encode(bytes).replace(/\+/g, "-").replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/**
+ * Decode canonical, unpadded RFC 4648 section 5 base64url. Refuses padding,
+ * standard-alphabet characters, whitespace, impossible lengths and nonzero
+ * unused bits. Errors contain a fixed reason, never input characters.
+ *
+ * @throws {AuthError} `base64-invalid`
+ *
+ * ```ts
+ * import { decode_url } from "@ikigai/ts/auth";
+ * import { assertEquals } from "@std/assert";
+ * assertEquals(decode_url("-_8"), new Uint8Array([0xfb, 0xff]));
+ * ```
+ */
+export function decode_url(encoded: string): Uint8Array {
+  if (/[^A-Za-z0-9_=\-]/.test(encoded) || /=.*[^=]/.test(encoded)) {
+    throw urlError("symbol");
+  }
+  if (encoded.includes("=")) throw urlError("padding");
+  if (encoded.length % 4 === 1) throw urlError("length");
+  const standard = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  try {
+    return base64Decode(standard + "=".repeat((4 - standard.length % 4) % 4));
+  } catch (e) {
+    if (!(e instanceof AuthError)) throw e;
+    throw urlError("bits");
+  }
 }
 
 // C0, DEL and C1 (RFC 7617 section 2 CTL; section 2.1 via RFC 7613).
