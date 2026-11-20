@@ -24,6 +24,7 @@ import {
 import { Writer } from "../src/postcard.ts";
 import {
   decodeReply,
+  DeniedError,
   DepthExceededError,
   encodeReply,
   EndpointError,
@@ -182,6 +183,17 @@ for (const c of VECTORS.cases) {
     if (error instanceof RetryAfterError) {
       assertStrictEquals(error.delayMs, c.retry_after_ms);
     }
+    if (error instanceof DeniedError) {
+      // The JSON face: `lacking` is read when present, an empty list when not.
+      const lacking = (c.json["lacking"] ?? []) as string[];
+      assertEquals(error.lacking, []);
+      const read = DeniedError.fromJson(c.json);
+      assertEquals(read.lacking, lacking);
+      assertEquals(read.message, error.message);
+      assertEquals(read.display(), c.display);
+      assertEquals(read.toJson(), c.json);
+      assertEquals(new DeniedError(error.message, lacking).toJson(), c.json);
+    }
     if (error instanceof GaveUpError) {
       assertStrictEquals(error.attempts, c.attempts);
       assertStrictEquals(error.elapsedMs, c.elapsed_ms);
@@ -316,5 +328,50 @@ Deno.test("gave-up JSON refuses missing, fractional, negative, and out-of-range 
     ]
   ) {
     assertThrows(() => GaveUpError.fromJson(json), TypeError);
+  }
+});
+
+Deno.test("a floor denial's lacking scopes survive the JSON face, and only it", () => {
+  const lacking = ["urn:cap:fs:read", "urn:cap:fs:*"];
+  const json = { kind: "denied", message: "no", lacking };
+  const read = DeniedError.fromJson(json);
+  assertEquals(read.lacking, lacking);
+  assertEquals(read.toJson(), json);
+  assertEquals(DeniedError.fromJson(read.toJson()).lacking, lacking);
+  // Absent and empty both read as none, and none is never written.
+  assertEquals(
+    DeniedError.fromJson({ kind: "denied", message: "no" }).lacking,
+    [],
+  );
+  assertEquals(
+    DeniedError.fromJson({ kind: "denied", message: "no", lacking: [] })
+      .toJson(),
+    { kind: "denied", message: "no" },
+  );
+  // The wire carries the message alone: tag 4 is unchanged.
+  const failure = toWireFailure(read);
+  assertEquals(failure, { kind: "denied", message: "no" });
+  assertEquals(
+    encodeReply({ kind: "errorTyped", failure }),
+    encodeReply({
+      kind: "errorTyped",
+      failure: toWireFailure(new DeniedError("no")),
+    }),
+  );
+});
+
+Deno.test("denied JSON refuses a missing message and a malformed lacking", () => {
+  for (
+    const json of [
+      null,
+      {},
+      { kind: "endpoint", message: "no" },
+      { kind: "denied" },
+      { kind: "denied", message: "no", lacking: "urn:cap:x" },
+      { kind: "denied", message: "no", lacking: [1] },
+      { kind: "denied", message: "no", lacking: {} },
+    ]
+  ) {
+    assertThrows(() => DeniedError.fromJson(json), TypeError);
   }
 });
