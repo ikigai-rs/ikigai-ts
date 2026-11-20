@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — a floor denial names its missing scopes (ledger #3843)
+
+- Sync the shared failure-class vectors and cases verbatim with ikigai-core main
+  (df867e4, core 0.4.0), adding the `denied-by-the-floor` row.
+- `DeniedError` gains `lacking`, the scopes the capability floor found missing
+  (empty by default), and a JSON face: `toJson()` writes `lacking` only when it
+  is not empty, and `DeniedError.fromJson()` reads it as optional. The wire is
+  unchanged: tag 4 carries the message alone.
+
 ## Unreleased — canonical base64url (ledger #3771)
 
 - Add `encode_url` and `decode_url` to `@ikigai/ts/auth` for canonical, unpadded

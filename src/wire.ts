@@ -343,8 +343,67 @@ export class InvalidArgumentError extends EndpointError {
  * The capability did not authorize the operation (`Error::Denied`) — a
  * **permanent** denial. A failover must not paper over it with a weaker
  * local answer; an HTTP face says 403.
+ *
+ * A denial the kernel's declared-capability floor raised also names the
+ * scopes it found missing ({@linkcode DeniedError.lacking}, core 0.4.0). The
+ * list lives in the JSON face only: the wire carries the message alone, so a
+ * denial read from the wire, or refused by an endpoint itself, has none.
  */
 export class DeniedError extends EndpointError {
+  /**
+   * The scopes the capability floor found missing, in declaration order and
+   * spelled as declared (a family keeps its `*`); empty when the denial
+   * names none (`Error::lacking`).
+   */
+  readonly lacking: readonly string[];
+
+  /** The message, then the missing scopes, if the floor named any. */
+  constructor(message: string, lacking: readonly string[] = []) {
+    super(message);
+    this.lacking = Object.freeze([...lacking]);
+  }
+
+  /**
+   * Core's JSON error face (`Error::to_json`): `kind` and `message`, and
+   * `lacking` only when it is not empty, so a plain denial is unchanged.
+   *
+   * ```ts
+   * import { DeniedError } from "./wire.ts";
+   * new DeniedError("no").toJson(); // { kind: "denied", message: "no" }
+   * new DeniedError("no", ["urn:cap:x"]).toJson().lacking; // ["urn:cap:x"]
+   * ```
+   */
+  toJson(): Record<string, unknown> {
+    const json: Record<string, unknown> = {
+      kind: this.kind(),
+      message: this.message,
+    };
+    if (this.lacking.length > 0) json.lacking = [...this.lacking];
+    return json;
+  }
+
+  /**
+   * Read a denied JSON face (`Error::from_json`). `lacking` is optional and
+   * reads as an empty list when absent; when present it must be a list of
+   * strings.
+   */
+  static fromJson(value: unknown): DeniedError {
+    if (typeof value !== "object" || value === null) {
+      throw new TypeError("denied error must be an object");
+    }
+    const json = value as Record<string, unknown>;
+    if (json.kind !== "denied" || typeof json.message !== "string") {
+      throw new TypeError("denied error requires kind denied and a message");
+    }
+    const lacking = json.lacking ?? [];
+    if (
+      !Array.isArray(lacking) || !lacking.every((s) => typeof s === "string")
+    ) {
+      throw new TypeError("denied error lacking must be a list of strings");
+    }
+    return new DeniedError(json.message, lacking);
+  }
+
   /** Rust's Display: `denied: {msg}`. */
   override display(): string {
     return `denied: ${this.message}`;
