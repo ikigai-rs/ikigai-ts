@@ -437,7 +437,7 @@ export type ExistsHandler = (
 // ---------------------------------------------------------------------------
 
 /** A declared resend guarantee; absent or null never permits a resend. */
-export type Resend = "safe" | { readonly key: string };
+export type Resend = "safe" | "unsafe" | { readonly key: string };
 
 /** Whether the contract explicitly permits a resend with these argument names. */
 export function resendSafe(
@@ -446,7 +446,8 @@ export function resendSafe(
 ): boolean {
   const resend = contract.resend;
   return resend === "safe" ||
-    (resend != null && Object.hasOwn(arguments_, resend.key));
+    (typeof resend === "object" && resend !== null &&
+      Object.hasOwn(arguments_, resend.key));
 }
 
 /** `ikigai_core::ActionSpec`: one verb's contract. */
@@ -673,7 +674,7 @@ function constructsJson(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (c.resend != null) {
-    out["resend"] = c.resend === "safe" ? "safe" : { ...c.resend };
+    out["resend"] = typeof c.resend === "string" ? c.resend : { ...c.resend };
   }
   if (c.existenceSensitive) out["existence_sensitive"] = true;
   if (c.failures !== undefined) out["failures"] = [...c.failures];
@@ -912,6 +913,8 @@ function descriptionTurtle(d: DescriptionModel): string {
     }
     if (action.resend === "safe") {
       actionPreds.push("ik:resendSafe true");
+    } else if (action.resend === "unsafe") {
+      actionPreds.push("ik:resendSafe false");
     } else if (action.resend != null) {
       actionPreds.push(
         `ik:resendKey <${actionIri}:input:${nameFragment(action.resend.key)}>`,
@@ -1386,6 +1389,9 @@ export class EndpointDef extends ServedDef {
     this.cacheable = options.cacheable ?? false;
     this.requires = [...(options.requires ?? [])];
     this.existenceSensitive = options.existenceSensitive ?? false;
+    if (options.resend === "unsafe") {
+      throw new Error(`${iri}: Source cannot declare resend unsafe`);
+    }
     this.resend = options.resend;
   }
 
@@ -1650,6 +1656,14 @@ export class Family extends ServedDef {
   ): this {
     if (this.#actions.has(verb)) {
       throw new Error(`${this.iri}: ${verbName(verb)} is declared twice`);
+    }
+    if (
+      options.resend === "unsafe" &&
+      (verb === Verb.Source || verb === Verb.Exists || verb === Verb.Meta)
+    ) {
+      throw new Error(
+        `${this.iri}: ${verbName(verb)} cannot declare resend unsafe`,
+      );
     }
     const args = (options.args ?? []).map((x) => new ArgSpec(x));
     assertNoCollision(this.iri, `its ${verbName(verb)}`, this.bindings, args);

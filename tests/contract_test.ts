@@ -29,6 +29,7 @@ import {
   assertMatch,
   assertNotEquals,
   assertStrictEquals,
+  assertThrows,
 } from "@std/assert";
 import {
   type ActionSpecModel,
@@ -506,4 +507,17 @@ Deno.test("public doors carry resend declarations through JSON, digests, and Tur
   assertEquals(actions[1]["resend"], { key: "key" });
   assertStrictEquals(actions[2]["resend"], "safe");
   assert(verbs.descriptionTurtle().includes("ik:resendSafe true"));
+});
+
+Deno.test("unsafe resend is carried through the public API and refused on reads", () => {
+  const door = family("urn:take").delete({ resend: "unsafe" }, () => "");
+  const action = (door.descriptionJson()["actions"] as Json[])[0];
+  assertStrictEquals(action["resend"], "unsafe");
+  assert(door.descriptionTurtle().includes("ik:resendSafe false"));
+  assertStrictEquals(resendSafe({ resend: "unsafe" }, { key: "value" }), false);
+  assertThrows(() => endpoint("urn:read", { resend: "unsafe" }, () => ""));
+  assertThrows(() => family("urn:read").source({ resend: "unsafe" }, () => ""));
+  assertThrows(() =>
+    family("urn:read").exists({ resend: "unsafe" }, () => true)
+  );
 });

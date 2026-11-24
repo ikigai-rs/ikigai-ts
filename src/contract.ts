@@ -474,8 +474,8 @@ function contractIdV2(endpointId: string, spec: ActionSpecModel): string {
   // Resend is an optional tail: undeclared contracts retain their identity.
   if (spec.resend != null) {
     h.u8(5);
-    h.u8(spec.resend === "safe" ? 0 : 1);
-    if (spec.resend !== "safe") h.str(spec.resend.key);
+    h.u8(spec.resend === "safe" ? 0 : spec.resend === "unsafe" ? 2 : 1);
+    if (typeof spec.resend === "object") h.str(spec.resend.key);
   }
   return `b3:${h.digestHex()}`;
 }
