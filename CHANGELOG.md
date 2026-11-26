@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — caller capability in served handlers (ledger #4392)
+
+- Serve handlers and explicit Exists handlers receive a read-only `Caller` as
+  their third argument. Export `Caller` and `callerOf` for direct handler tests.
+  Existing handlers still work, and the wire format is unchanged.
+
 ## Unreleased — a floor denial names its missing scopes (ledger #3843)
 
 - Sync the shared failure-class vectors and cases verbatim with ikigai-core main

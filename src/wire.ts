@@ -909,6 +909,11 @@ export class Capability {
     return this.scopes === null;
   }
 
+  /** The single principal carried, or `null` for root, none, or several. */
+  principal(): string | null {
+    return this.scopes === null ? null : singlePrincipal(this.scopes);
+  }
+
   /**
    * Whether this capability grants `scope`, matched EXACTLY
    * (`Capability::allows` in core). Root grants everything. A scoped
@@ -938,7 +943,7 @@ export class Capability {
     if (held === null) return true;
     if (!held.has(scope) || isDenyScope(scope)) return false;
     const principal = principalIn(scope);
-    return principal === null || singlePrincipal(held) === principal;
+    return principal === null || this.principal() === principal;
   }
 
   /**

@@ -121,6 +121,7 @@ export {
 
 export {
   ArgSpec,
+  callerOf,
   checkAction,
   endpoint,
   EndpointDef,
@@ -143,6 +144,7 @@ export type {
   ArgSpecInput,
   ArgumentSet,
   BindingSpecInput,
+  Caller,
   DescriptionModel,
   EndpointOptions,
   ExistsHandler,
