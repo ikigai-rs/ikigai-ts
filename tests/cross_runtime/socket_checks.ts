@@ -21,10 +21,71 @@ import {
   ConnectionLost,
   defaultSocketPath,
 } from "../../src/client.ts";
-import { endpoint, Server } from "../../src/serve.ts";
+import {
+  type Caller,
+  callerOf,
+  endpoint,
+  family,
+  NO_RUN,
+  type ServedDef,
+  Server,
+} from "../../src/serve.ts";
+import { Capability, DeniedError } from "../../src/wire.ts";
 import type { Runtime, RuntimeStat } from "../../src/runtime.ts";
 
+const DOCS_PREFIX = "urn:cap:docs:read:";
+const DOCS_FLOOR = DOCS_PREFIX + "*";
+const HOME = DOCS_PREFIX + "/home";
+const SECRET = DOCS_PREFIX + "-/home/secret";
+
+function aclAllows(caller: Caller, path: string): boolean {
+  if (caller.isRoot) return true;
+  let depth = -1;
+  let allowed = false;
+  for (const scope of caller.under(DOCS_PREFIX)) {
+    const rule = scope.slice(DOCS_PREFIX.length);
+    const deny = rule.startsWith("-");
+    const dir = deny ? rule.slice(1) : rule;
+    if (path !== dir && !path.startsWith(dir === "/" ? "/" : dir + "/")) {
+      continue;
+    }
+    const candidate = dir.split("/").filter(Boolean).length;
+    if (candidate > depth || (candidate === depth && deny)) {
+      depth = candidate;
+      allowed = !deny;
+    }
+  }
+  return allowed;
+}
+
+function docsDoor(load: (path: string) => string, enter: () => void) {
+  return endpoint("urn:ts:docs", {
+    requires: [DOCS_FLOOR],
+    args: [{ name: "path", required: true }],
+  }, ({ path }, _run, caller) => {
+    enter();
+    const target = String(path);
+    if (!aclAllows(caller, target)) {
+      throw new DeniedError(
+        "capability does not grant `read` on `" + target + "`",
+      );
+    }
+    return load(target);
+  });
+}
+
 const ENDPOINTS = [
+  family("urn:ts:explicit-exists").exists(
+    (_args, _run, caller) => caller.allows("urn:cap:other"),
+  ),
+  family("urn:ts:derived-exists").source((_args, _run, caller) => {
+    if (!caller.allows("urn:cap:other")) throw new DeniedError("not granted");
+    return "found";
+  }),
+  endpoint("urn:ts:caller", {}, (_args, _run, caller) => {
+    assert(caller !== undefined, "the served handler received no caller");
+    return JSON.stringify(caller.scopes === null ? null : [...caller.scopes]);
+  }),
   endpoint("urn:ts:hello", {
     summary: "Greet someone",
     args: [{ name: "who", required: true }],
@@ -51,8 +112,9 @@ async function withServer(
   runtime: Runtime,
   path: string,
   fn: (server: Server) => Promise<void>,
+  doors: readonly ServedDef[] = ENDPOINTS,
 ): Promise<void> {
-  const server = new Server(ENDPOINTS, path, { runtime });
+  const server = new Server([...doors], path, { runtime });
   await server.ready;
   const serving = server.serve();
   try {
@@ -145,6 +207,128 @@ export const CHECKS: Check[] = [
           );
         })
       ),
+  },
+  {
+    name: "a served handler sees root for Issue and carried scopes for IssueAs",
+    fn: (server, client) =>
+      inTempDir((dir) =>
+        withServer(server, `${dir}/peer.sock`, async () => {
+          const path = `${dir}/peer.sock`;
+          await using root = await connect(path, { runtime: client });
+          const scopes = ["urn:cap:docs:read:-/secret", "urn:cap:other"];
+          await using scoped = await connect(path, {
+            runtime: client,
+            capability: Capability.scoped(scopes),
+          });
+          assertEquals((await root.source("urn:ts:caller")).text, "null");
+          assertEquals(
+            JSON.parse((await scoped.source("urn:ts:caller")).text),
+            scopes,
+          );
+          const [traced] = await scoped.sourceTraced("urn:ts:caller");
+          assertEquals(JSON.parse(traced.text), scopes);
+          scoped.run = { retries: 2 };
+          assertEquals(
+            JSON.parse((await scoped.source("urn:ts:caller")).text),
+            scopes,
+          );
+          scoped.run = null;
+          scoped.capability = null;
+          assertEquals((await scoped.source("urn:ts:caller")).text, "null");
+        })
+      ),
+  },
+  {
+    name: "explicit and derived Exists receive the caller",
+    fn: (server, client) =>
+      inTempDir((dir) =>
+        withServer(server, `${dir}/peer.sock`, async () => {
+          const path = `${dir}/peer.sock`;
+          await using scoped = await connect(path, {
+            runtime: client,
+            capability: Capability.scoped([]),
+          });
+          assertEquals(
+            (await scoped.exists("urn:ts:explicit-exists")).text,
+            "false",
+          );
+          await assertRejects(
+            () => scoped.exists("urn:ts:derived-exists"),
+            DeniedError,
+          );
+          await using root = await connect(path, { runtime: client });
+          for (const kind of ["explicit", "derived"]) {
+            assertEquals(
+              (await root.exists(`urn:ts:${kind}-exists`)).text,
+              "true",
+            );
+          }
+        })
+      ),
+  },
+  {
+    name: "a path ACL decides before loading and the floor runs first",
+    fn: (server, client) =>
+      inTempDir(async (dir) => {
+        const loaded: string[] = [];
+        let entered = 0;
+        const docs = docsDoor((path) => {
+          loaded.push(path);
+          return path;
+        }, () => entered++);
+        const secretPath = "/home/secret/key";
+        await assertRejects(
+          async () =>
+            await docs.handler(
+              { path: secretPath },
+              NO_RUN,
+              callerOf(Capability.scoped([HOME, SECRET])),
+            ),
+          DeniedError,
+          "capability does not grant `read` on `/home/secret/key`",
+        );
+        const socket = `${dir}/peer.sock`;
+        await withServer(server, socket, async () => {
+          for (
+            const [scopes, path, allowed] of [
+              [null, secretPath, true],
+              [[HOME, SECRET], "/home/public", true],
+              [[HOME, SECRET], "/homestead", false],
+              [[HOME, SECRET], secretPath, false],
+              [[HOME, DOCS_PREFIX + "-/home"], "/home/tie", false],
+              [[HOME, SECRET, DOCS_PREFIX + secretPath], secretPath, true],
+            ] as const
+          ) {
+            await using k = await connect(socket, {
+              runtime: client,
+              capability: scopes === null
+                ? undefined
+                : Capability.scoped(scopes),
+            });
+            if (allowed) {
+              assertEquals((await k.source(docs.iri, { path })).text, path);
+            } else {
+              await assertRejects(
+                () => k.source(docs.iri, { path }),
+                DeniedError,
+                `capability does not grant \`read\` on \`${path}\``,
+              );
+            }
+          }
+          const beforeFloorDenial = entered;
+          await using other = await connect(socket, {
+            runtime: client,
+            capability: Capability.scoped(["urn:cap:other"]),
+          });
+          await assertRejects(
+            () => other.source(docs.iri, { path: "/home/public" }),
+            DeniedError,
+            `capability does not grant \`${DOCS_FLOOR}\` (declared by \`${docs.iri}\`;`,
+          );
+          assertEquals(entered, beforeFloorDenial);
+        }, [docs]);
+        assertEquals(loaded, [secretPath, "/home/public", secretPath]);
+      }),
   },
   {
     name: "the socket is 0600 in a fresh 0700 directory",

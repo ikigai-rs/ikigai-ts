@@ -64,12 +64,14 @@
  *
  * **The capability floor is enforced here, on every call** (core's
  * declared-capability floor, ported): a capability carried on
- * `IssueAs`/`IssueTraced` must satisfy every scope the door declares for the
- * verb (`requires`, per verb when declared per verb, flat otherwise), or the
+ * `IssueAs`, `IssueTraced`, or `IssueWith` must satisfy every scope the door
+ * declares for the verb (`requires`, per verb when declared per verb, flat otherwise), or the
  * call is refused as a typed `Denied` before the handler runs — so a host
  * that forwards a caller's capability can rely on this peer running its own
  * floor. A plain `Issue` carries no capability and resolves under root, as
- * the Rust IPC door does for its owner. See {@linkcode Space.dispatch}.
+ * the Rust IPC door does for its owner. Handlers receive the capability
+ * checked by the floor as a read-only {@linkcode Caller}. See
+ * {@linkcode Space.dispatch}.
  *
  * @module
  */
@@ -413,6 +415,50 @@ export function runContext(
 /** The run context of a call that carried none. */
 export const NO_RUN: RunContext = runContext(null, null);
 
+/** The read-only capability the served call resolves under. */
+export interface Caller {
+  /** Whether the call resolves under root. */
+  readonly isRoot: boolean;
+  /** Every held scope, grants and exclusions alike, or `null` for root. */
+  readonly scopes: ReadonlySet<string> | null;
+  /** The single carried principal, or `null` if there is no single principal. */
+  principal(): string | null;
+  /** Whether the capability grants this exact scope, excluding denies. */
+  allows(scope: string): boolean;
+  /** Whether the capability meets a declared floor scope, including family wildcards. */
+  satisfies(scope: string): boolean;
+  /** Held scopes starting with `prefix`, sorted as on the wire. Empty for root. */
+  under(prefix: string): readonly string[];
+}
+
+/** Build a caller view from a capability, for example to run a handler directly in a test. */
+export function callerOf(capability: wire.Capability): Caller {
+  // Snapshot so mutating the input cannot change the view. Return a copy
+  // for enumeration because freezing a Set does not freeze its entries.
+  const held = capability.scopes;
+  const cap = held === null
+    ? wire.Capability.root()
+    : wire.Capability.scoped(held);
+  return Object.freeze({
+    isRoot: cap.isRoot,
+    get scopes(): ReadonlySet<string> | null {
+      return cap.scopes === null ? null : new Set(cap.scopes);
+    },
+    principal: () => cap.principal(),
+    allows: (scope: string) => cap.allows(scope),
+    satisfies: (scope: string) => cap.satisfies(scope),
+    under: (prefix: string) =>
+      Object.freeze(wire.sortedUtf8(
+        cap.scopes === null
+          ? []
+          : [...cap.scopes].filter((scope) => scope.startsWith(prefix)),
+      )),
+  });
+}
+
+// Direct calls to answer that omit a caller do not implicitly gain root.
+const NO_CALLER = callerOf(wire.Capability.scoped([]));
+
 /**
  * The function behind a verb. A thrown typed error (`NotFoundError`,
  * `DeniedError`, …) crosses the wire as that variant; anything else thrown
@@ -424,12 +470,14 @@ export const NO_RUN: RunContext = runContext(null, null);
 export type Handler = (
   args: HandlerArgs,
   run: RunContext,
+  caller: Caller,
 ) => HandlerResult | Promise<HandlerResult>;
 
 /** An explicit Exists answers yes or no. */
 export type ExistsHandler = (
   args: HandlerArgs,
   run: RunContext,
+  caller: Caller,
 ) => boolean | Promise<boolean>;
 
 // ---------------------------------------------------------------------------
@@ -1116,10 +1164,11 @@ async function runHandler(
   cacheable: boolean,
   mutating: boolean,
   run: RunContext,
+  caller: Caller,
 ): Promise<Reply> {
   let result: HandlerResult;
   try {
-    result = await handler(args, run);
+    result = await handler(args, run, caller);
   } catch (e) {
     // A handler failure crosses typed, never as a hang: the typed classes
     // map to their own taxonomy variants (a thrown NotFoundError IS a
@@ -1219,11 +1268,12 @@ export abstract class ServedDef {
   /** The `ikigai_core::Description` this door answers Meta with. */
   abstract description(): DescriptionModel;
 
-  /** Answer a non-Meta verb at a matched IRI. */
+  /** Answer a non-Meta verb at a matched IRI. Dispatch always supplies the caller. */
   abstract answer(
     request: Request,
     bindings: Readonly<Record<string, string>>,
     run?: RunContext,
+    caller?: Caller,
   ): Promise<Reply>;
 
   /** The verbs this door answers, for a refusal that names them. */
@@ -1435,6 +1485,7 @@ export class EndpointDef extends ServedDef {
     request: Request,
     bindings: Readonly<Record<string, string>>,
     run: RunContext = NO_RUN,
+    caller: Caller = NO_CALLER,
   ): Promise<Reply> {
     if (request.verb === Verb.Exists) {
       // The flat form's Exists is "the name is bound" — unchanged since L0,
@@ -1452,6 +1503,7 @@ export class EndpointDef extends ServedDef {
       this.cacheable,
       false,
       run,
+      caller,
     );
   }
 }
@@ -1737,15 +1789,22 @@ export class Family extends ServedDef {
     request: Request,
     bindings: Readonly<Record<string, string>>,
     run: RunContext = NO_RUN,
+    caller: Caller = NO_CALLER,
   ): Promise<Reply> {
     const action = this.#actions.get(request.verb);
     if (request.verb === Verb.Exists) {
       if (action !== undefined) {
-        return await this.#explicitExists(action, request, bindings, run);
+        return await this.#explicitExists(
+          action,
+          request,
+          bindings,
+          run,
+          caller,
+        );
       }
       const source = this.#actions.get(Verb.Source);
       if (source === undefined) return this.refuse(request.verb);
-      const reply = await this.#run(source, request, bindings, run);
+      const reply = await this.#run(source, request, bindings, run, caller);
       if (reply.kind === "resolved") {
         return booleanReply(true, source.cacheable);
       }
@@ -1755,7 +1814,7 @@ export class Family extends ServedDef {
       return reply;
     }
     if (action === undefined) return this.refuse(request.verb);
-    return await this.#run(action, request, bindings, run);
+    return await this.#run(action, request, bindings, run, caller);
   }
 
   async #run(
@@ -1763,6 +1822,7 @@ export class Family extends ServedDef {
     request: Request,
     bindings: Readonly<Record<string, string>>,
     run: RunContext,
+    caller: Caller,
   ): Promise<Reply> {
     const routed = routeArgs(bindings, action.args, request);
     if ("refused" in routed) return routed.refused;
@@ -1774,6 +1834,7 @@ export class Family extends ServedDef {
       action.cacheable,
       mutating,
       run,
+      caller,
     );
   }
 
@@ -1782,12 +1843,13 @@ export class Family extends ServedDef {
     request: Request,
     bindings: Readonly<Record<string, string>>,
     run: RunContext,
+    caller: Caller,
   ): Promise<Reply> {
     const routed = routeArgs(bindings, action.args, request);
     if ("refused" in routed) return routed.refused;
     try {
       return booleanReply(
-        await action.exists!(routed.args, run),
+        await action.exists!(routed.args, run, caller),
         action.cacheable,
       );
     } catch (e) {
@@ -2050,7 +2112,12 @@ export class Space {
         },
       };
     }
-    return await hit.def.answer(request, hit.bindings, run);
+    return await hit.def.answer(
+      request,
+      hit.bindings,
+      run,
+      callerOf(capability),
+    );
   }
 
   #meta(d: ServedDef, request: Request): Reply {

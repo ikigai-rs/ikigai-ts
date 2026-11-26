@@ -667,9 +667,10 @@ What a socket's mode gates on `connect`, by OS:
   split on `/` only, and none of it is tested.
 
 **The capability floor is enforced on every call**, as core's kernel enforces
-it: a capability carried on `IssueAs`/`IssueTraced` must satisfy every scope the
-door declares for the request's verb, or the call is refused as a typed `Denied`
-(core's message text) before the handler runs. The rules are core's:
+it: a capability carried on `IssueAs`, `IssueTraced`, or `IssueWith` must
+satisfy every scope the door declares for the request's verb, or the call is
+refused as a typed `Denied` (core's message text) before the handler runs. The
+rules are core's:
 
 - Per verb: a verb's own `requires` (on a `family` verb) REPLACES the flat list
   for that verb; an undeclared Exists needs what Source needs; any other
@@ -693,9 +694,21 @@ door declares for the request's verb, or the call is refused as a typed `Denied`
   (`ServedDef.conceals`). The `endpoint` and `family` builders cannot mark a
   door yet, so today this applies to a `ServedDef` whose description does.
 
-A handler does not see the caller's capability, so a finer, argument-dependent
-gate (a path or host ACL) is not expressible here yet; the floor is the coarse
-declared check only.
+Handlers that need a finer check can declare a third argument
+`(args, run, caller)`. This read-only `Caller` sees the same capability the
+floor checked. It exposes `isRoot`, `scopes` (including exclusions, or `null`
+for root), `principal()`, `allows(scope)`, and `satisfies(scope)`.
+`under(prefix)` returns matching scopes in wire sort order, including
+exclusions. The view cannot issue requests as the caller. Existing two-argument
+handlers keep working, and direct handler tests can pass `callerOf(capability)`.
+
+- Apply an argument-dependent rule before looking up the target. If the door
+  must hide whether the target exists, throw `NotFoundError` instead of
+  `DeniedError` when the rule refuses access.
+- An ACL-dependent answer can still use its normal expiry. The host cache key
+  includes the capability fingerprint. As with any cacheable answer, the result
+  should depend only on the capability, the arguments, and what the handler
+  reads.
 
 ## Wire-protocol notes (for implementors)
 
